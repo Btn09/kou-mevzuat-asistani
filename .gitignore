@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# Eğitim ortamı ve model dosyaları (büyük; GitHub'a sığmaz)
+.venv-train/
+trendyol-8b-kou-lora*/
+trendyol-8b-kou-merged*/
+*.gguf
+*.safetensors
+
+# Kullanıcı soruları içeren kayıtlar
+geri_bildirim.jsonl
+bilgi_yok.jsonl
