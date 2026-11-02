@@ -16,7 +16,10 @@ Ollama açık olmalı (CHAT_MODEL ve bge-m3).
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
 import re
 import threading
 import time
@@ -24,11 +27,12 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 import ollama
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 import belge_bilgisi
@@ -52,8 +56,44 @@ DETAIL_RATIO = 0.6
 MAX_MESSAGE_CHARS = 500
 OTURUM_ZAMAN_ASIMI = 2 * 3600  # kullanılmayan sohbet bu kadar saniye sonra bellekten silinir
 MAX_OTURUM = 200
+# İnternete tünelle açıldığında (sunucu_baslat.bat) siteye girişte sorulan kod. Boşsa sorulmaz (yerel kullanım).
+ERISIM_KODU = os.environ.get("KOU_ERISIM_KODU", "")
+ERISIM_CEREZI = "kou_erisim"
+ERISIM_SURESI = 12 * 3600
 
 app = FastAPI(title="KOÜ Mevzuat Asistanı")
+
+
+def erisim_anahtari() -> str:
+    """Çerezde kodun kendisi değil özeti tutulur."""
+    return hashlib.sha256(f"kou-mevzuat:{ERISIM_KODU}".encode("utf-8")).hexdigest()
+
+
+@app.middleware("http")
+async def erisim_kontrolu(request: Request, call_next):
+    # /api/saglik yalnız "hazır mı" söyler; başlatma betiği koddan önce bununla bekler
+    if ERISIM_KODU and request.url.path not in ("/giris", "/api/saglik") and not hmac.compare_digest(
+            request.cookies.get(ERISIM_CEREZI, ""), erisim_anahtari()):
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": "Erişim kodu gerekli. Sayfayı yenileyin."}, status_code=401)
+        return RedirectResponse("/giris", status_code=303)
+    return await call_next(request)
+
+
+@app.get("/giris")
+def login_page() -> FileResponse:
+    return FileResponse(PROJECT_DIR / "web" / "giris.html", headers={"Cache-Control": "no-cache"})
+
+
+@app.post("/giris")
+async def login(request: Request) -> RedirectResponse:
+    kod = parse_qs((await request.body()).decode("utf-8")).get("kod", [""])[0]
+    if ERISIM_KODU and hmac.compare_digest(kod.encode("utf-8"), ERISIM_KODU.encode("utf-8")):
+        response = RedirectResponse("/", status_code=303)
+        response.set_cookie(ERISIM_CEREZI, erisim_anahtari(), max_age=ERISIM_SURESI, httponly=True, samesite="lax")
+        return response
+    time.sleep(1)  # art arda deneme yavaşlasın
+    return RedirectResponse("/giris?hata=1", status_code=303)
 asistan = Asistan3(CHAT_MODEL)
 sessions: dict[str, dict[str, Any]] = {}  # oturum -> {"sohbet": Sohbet3, "son": zaman}
 sessions_lock = threading.Lock()
